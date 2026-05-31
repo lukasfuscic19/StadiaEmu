@@ -13,7 +13,7 @@ cd D:\Cursor\StadiaEmu
 
 # Replace YOUR_USER with your GitHub username
 git remote rename origin upstream
-git remote add origin https://github.com/YOUR_USER/StadiaEmu.git
+git remote add origin https://github.com/lukasfuscic19/StadiaEmu.git
 ```
 
 Keep `upstream` if you want to pull from walkco/stadia-vigem later.

@@ -43,7 +43,7 @@ Tray menu: device count, **Start with Windows**, **Refresh**, **Quit**. HidHide 
 Requires **Visual Studio 2022** with C++ desktop workload and Windows 10/11 SDK.
 
 ```bat
-git clone --recurse-submodules https://github.com/YOUR_USER/StadiaEmu.git
+git clone --recurse-submodules https://github.com/lukasfuscic19/StadiaEmu.git
 cd StadiaEmu
 build_quick.bat
 ```
