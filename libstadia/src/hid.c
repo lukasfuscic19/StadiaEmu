@@ -292,12 +292,18 @@ struct hid_device *hid_open_device(LPTSTR path, BOOL access_rw, BOOL shared)
     _tcscpy(dev->path, path);
     dev->handle = handle;
     dev->read_pending = FALSE;
+    dev->usage_page = caps.UsagePage;
+    dev->usage = caps.Usage;
     dev->input_report_size = caps.InputReportByteLength;
     dev->output_report_size = caps.OutputReportByteLength;
     dev->feature_report_size = caps.FeatureReportByteLength;
     dev->input_buffer = (BYTE *)malloc(caps.InputReportByteLength);
-    dev->output_buffer = (BYTE *)malloc(caps.OutputReportByteLength);
-    dev->feature_buffer = (BYTE *)malloc(caps.FeatureReportByteLength);
+    /* Allocate at least 64 bytes so callers can always write a full report
+       even when the HID descriptor reports OutputReportByteLength = 0. */
+    dev->output_buffer = (BYTE *)malloc(caps.OutputReportByteLength > 0
+                                        ? caps.OutputReportByteLength : 64);
+    dev->feature_buffer = (BYTE *)malloc(caps.FeatureReportByteLength > 0
+                                         ? caps.FeatureReportByteLength : 64);
 
     HidD_FreePreparsedData(pp_data);
 
@@ -363,11 +369,20 @@ INT hid_send_output_report(struct hid_device *device, const void *data, size_t l
     {
         device->write_pending = TRUE;
 
-        memset(device->output_buffer, 0x0, device->output_report_size);
-        memmove(device->output_buffer, data, length > device->output_report_size ? device->output_report_size : length);
+        /*
+         * Some devices (e.g. Stadia USB) report OutputReportByteLength=0 in their
+         * HID descriptor even though they accept output reports. Fall back to the
+         * caller-supplied length so the write is never a no-op.
+         */
+        DWORD write_size = device->output_report_size > 0
+                           ? device->output_report_size
+                           : (DWORD)length;
+
+        memset(device->output_buffer, 0x0, write_size);
+        memmove(device->output_buffer, data, length > write_size ? write_size : length);
 
         ResetEvent(ev);
-        if (!WriteFile(device->handle, device->output_buffer, device->output_report_size, &bytes_written, &device->output_ol))
+        if (!WriteFile(device->handle, device->output_buffer, write_size, &bytes_written, &device->output_ol))
         {
             if (GetLastError() != ERROR_IO_PENDING)
             {
@@ -398,6 +413,26 @@ INT hid_send_output_report(struct hid_device *device, const void *data, size_t l
     }
 
     device->write_pending = FALSE;
+    return -1;
+}
+
+/* HidD_SetOutputReport uses IOCTL_HID_SET_OUTPUT_REPORT which maps to an ATT
+ * Write Request (with response) on BLE, unlike WriteFile which maps to ATT
+ * Write Command (without response). Use this for BLE output characteristics
+ * that have the Write property (W=1) but not WriteWithoutResponse (WNR=0). */
+INT hid_set_output_report(struct hid_device *device, const void *data, size_t length)
+{
+    size_t buf_len = device->output_report_size > 0
+                     ? device->output_report_size : length;
+    BYTE *buf = (BYTE *)malloc(buf_len);
+    if (!buf) return -1;
+    memset(buf, 0, buf_len);
+    memcpy(buf, data, length < buf_len ? length : buf_len);
+    BOOLEAN ok = HidD_SetOutputReport(device->handle, buf, (ULONG)buf_len);
+    DWORD err = GetLastError();
+    free(buf);
+    if (ok) return (INT)buf_len;
+    SetLastError(err);
     return -1;
 }
 

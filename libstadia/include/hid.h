@@ -25,6 +25,8 @@ struct hid_device
     BOOL read_pending;
     BOOL write_pending;
 
+    USHORT usage_page;           /* HID top-level collection usage page */
+    USHORT usage;                /* HID top-level collection usage */
     USHORT input_report_size;
     USHORT output_report_size;
     USHORT feature_report_size;
@@ -44,6 +46,7 @@ void hid_free_device_info(struct hid_device_info *device_info);
 struct hid_device *hid_open_device(LPTSTR path, BOOL access_rw, BOOL shared);
 INT hid_get_input_report(struct hid_device *device, DWORD timeout);
 INT hid_send_output_report(struct hid_device *device, const void *data, size_t length, DWORD timeout);
+INT hid_set_output_report(struct hid_device *device, const void *data, size_t length);
 INT hid_send_feature_report(struct hid_device *device, const void *data, size_t length);
 void hid_close_device(struct hid_device *device);
 void hid_free_device(struct hid_device *device);

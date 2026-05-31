@@ -1,38 +1,78 @@
-# Stadia-ViGEm
+# Stadia ViGEm
 
-Xbox 360 controller emulation for Stadia controller. Supports controllers connected via USB & bluetooth. Supports multiple devices and vibration (wired only). Forked from Mi-ViGEm (https://github.com/grayver/Mi-ViGEm) by grayver.
-Xbox 360 controller emulation driver is provided by ViGEm (https://github.com/ViGEm/ViGEmBus), by Benjamin Höglinger.
+Map a **Google Stadia controller** (USB or Bluetooth) to a virtual **Xbox 360 gamepad** on Windows using [ViGEmBus](https://github.com/ViGEm/ViGEmBus).
+
+Runs in the system tray. HidHide hides the physical controller so games see only the virtual Xbox pad.
+
+Fork of [walkco/stadia-vigem](https://github.com/walkco/stadia-vigem) with BLE support, stability fixes, and an installer.
+
+## Features
+
+| Mode | Input | Vibration |
+|------|-------|-----------|
+| USB | Yes | Yes |
+| Bluetooth | Yes | **No** (Windows 11 OS limitation) |
+
+Bluetooth rumble was tested extensively (HID, Win32 GATT, WinRT + Sparse Package) — blocked by `hidbthle.sys`. See project docs for details.
 
 ## Requirements
-- Windows 11 (should work on Windows 7-10 also)
-- ViGEm bus installed (can be downloaded [here](https://github.com/ViGEm/ViGEmBus/releases))
 
-## How it works
-Stadia-ViGEm program at start scans for Stadia Controllers and then proxies found Stadia Controllers to virtual Xbox 360 gamepads (with help from ViGEmBus). Also Stadia-ViGEm subscribes to system device plug/unplug notifications and rescans for devices on each notification.
-All found devices are displayed in the tray icon context menu. Manual device rescan can be initiated via the tray icon context menu.
+- Windows 10/11 x64
+- [ViGEmBus](https://github.com/ViGEm/ViGEmBus) (installed automatically)
+- [HidHide](https://github.com/nefarius/HidHide) (installed automatically; prevents duplicate controllers)
 
-## Double input
-Stadia-ViGEm creates a virtual Xbox 360 controller which results in double input issues when some applications will read input from both the virtual and the real Stadia controller. To avoid this, install [HidHide](https://github.com/ViGEm/HidHide) and configure it as follows:
- - Open HidHide Configuration Client
- - On Applications tab:
-   - Click "+" button
-   - Browse to the Stadia-ViGEm executable you normally use (Stadia-ViGEm-x86.exe or Stadia-ViGEm-x64.exe)
- - On Devices tab:
-   - Tick box next to the Stadia controller entry (wired controllers are named "Google LLC Stadia Controller rev. A" & bluetooth controllers are named "HID-compliant game controller")
-   - Tick "Enable device hiding" at the bottom of the window
- - Reboot your PC
+## Quick install (end user)
 
-After this, only Stadia-ViGEm will be able to see the real controller. Note: This means that whenever Stadia-ViGEm isn't running, the controller will not be able to control anything on your PC.
+1. Download the latest **Release** zip or clone this repo after building.
+2. Ensure `bin\stadia-vigem-x64.exe` exists (from release or `build_quick.bat`).
+3. Right-click **PowerShell → Run as administrator**, then:
 
-## Thanks to
+```powershell
+cd path\to\StadiaEmu
+powershell -ExecutionPolicy Bypass -File .\Install.ps1
+```
 
-grayver, the developer of Mi-ViGEm that makes up 95% of this program.
+4. Launch **Stadia ViGEm** from the Start Menu.
+5. Connect your Stadia controller (USB or Bluetooth pairing in Windows Settings).
+6. Reboot once if ViGEmBus or HidHide were installed for the first time.
 
-This project is inspired by following projects written on C#:
-- https://github.com/irungentoo/Xiaomi_gamepad
-- https://github.com/dancol90/mi-360
+Tray menu: device count, **Start with Windows**, **Refresh**, **Quit**. HidHide is managed automatically.
 
-Thanks to following libraries and resources:
-- https://github.com/libusb/hidapi for HID implementation
-- https://github.com/zserge/tray for lightweight tray app implementation
-- https://www.flaticon.com/authors/freepik for application icon
+## Build from source
+
+Requires **Visual Studio 2022** with C++ desktop workload and Windows 10/11 SDK.
+
+```bat
+git clone --recurse-submodules https://github.com/YOUR_USER/StadiaEmu.git
+cd StadiaEmu
+build_quick.bat
+```
+
+Output: `bin\stadia-vigem-x64.exe`
+
+Full CMake-style build: `.\Build.ps1 -Architecture x64 -Configuration RELEASE`
+
+## Debug log
+
+When running, the app writes `debug.log` next to the executable (same folder as `stadia-vigem-x64.exe`).
+
+## Project layout
+
+```
+libstadia/          Core HID + Stadia protocol + GATT helpers
+stadia-vigem/       Tray application + ViGEm bridge
+ViGEmClient/        Submodule (ViGEm client library)
+Install.ps1         End-user installer (drivers + app)
+build_quick.bat     Fast local build
+Build.ps1           Full VS build script
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE). Based on [walkco/stadia-vigem](https://github.com/walkco/stadia-vigem) (Copyright (c) 2020 grayver).
+
+## Credits
+
+- [ViGEmBus](https://github.com/ViGEm/ViGEmBus) / [ViGEmClient](https://github.com/ViGEm/ViGEmClient)
+- [HidHide](https://github.com/nefarius/HidHide) (Nefarius)
+- Chromium / SDL Stadia controller references

@@ -25,10 +25,17 @@ static HANDLE hmutex;
 static HDEVNOTIFY hdevntf;
 static void (*devntf_cb)(UINT op, LPTSTR path) = NULL;
 
+
+/* Callback for WM_APP — set from main.c */
+static void (*_wm_app_cb)(void) = NULL;
+void tray_set_wm_app_callback(void (*cb)(void)) { _wm_app_cb = cb; }
 static LRESULT CALLBACK _tray_wnd_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     switch (msg)
     {
+    case WM_APP:
+        if (_wm_app_cb) _wm_app_cb();
+        return 0;
     case WM_CLOSE:
         if (hdevntf != NULL)
         {
@@ -249,6 +256,12 @@ void tray_register_device_notification(GUID filter, void (*cb)(UINT, LPTSTR))
     {
         devntf_cb = cb;
     }
+}
+
+void tray_post_refresh(void)
+{
+    if (window_handle != NULL)
+        PostMessage(window_handle, WM_APP, 0, 0);
 }
 
 void tray_show_notification(UINT type, LPTSTR title, LPTSTR text)

@@ -1,9 +1,5 @@
 /*
  * stadia.c -- Routines for interacting with a Stadia controller.
- *
- * Supports two modes:
- *   USB  — HID via hid_device (overlapped ReadFile / WriteFile)
- *   BLE  — GATT via gatt_device (Win32 poll + WinRT write)
  */
 
 #include "stadia.h"
@@ -11,11 +7,35 @@
 #include "gatt.h"
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <synchapi.h>
 #include <tchar.h>
 #include <windows.h>
 
 #pragma comment(lib, "kernel32.lib")
+
+static void stadia_dbg(const char *fmt, ...)
+{
+    static FILE *f = NULL;
+    static CRITICAL_SECTION cs;
+    static BOOL cs_ok = FALSE;
+    if (!cs_ok) { InitializeCriticalSection(&cs); cs_ok = TRUE; }
+    EnterCriticalSection(&cs);
+    if (!f) {
+        WCHAR path[MAX_PATH];
+        GetModuleFileNameW(NULL, path, MAX_PATH);
+        WCHAR *sl = wcsrchr(path, L'\\');
+        if (sl) { sl[1] = 0; wcscat_s(path, MAX_PATH, L"debug.log"); }
+        f = _wfopen(path, L"a");
+    }
+    if (f) {
+        SYSTEMTIME st; GetLocalTime(&st);
+        fprintf(f, "[%02d:%02d:%02d.%03d] [STADIA] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+        va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap);
+        fprintf(f, "\n"); fflush(f);
+    }
+    LeaveCriticalSection(&cs);
+}
 
 #define STADIA_READ_TIMEOUT        10
 #define STADIA_VIBRATION_REPORT_ID 0x05
@@ -34,9 +54,6 @@ static const DWORD dpad_map[8] =
     STADIA_BUTTON_LEFT  | STADIA_BUTTON_UP
 };
 
-/* -----------------------------------------------------------------------
- * Input packet parser — shared by USB thread and BLE callback
- * ----------------------------------------------------------------------- */
 static void parse_input(struct stadia_controller *c, const BYTE *buf, size_t len)
 {
     if (len < 10) return;
@@ -51,14 +68,13 @@ static void parse_input(struct stadia_controller *c, const BYTE *buf, size_t len
     c->state.buttons |= (buf[2] & (1<<6)) ? STADIA_BUTTON_OPTIONS     : 0;
     c->state.buttons |= (buf[2] & (1<<5)) ? STADIA_BUTTON_MENU        : 0;
     c->state.buttons |= (buf[2] & (1<<4)) ? STADIA_BUTTON_STADIA_BTN  : 0;
-
-    c->state.buttons |= (buf[3] & (1<<6)) ? STADIA_BUTTON_A  : 0;
-    c->state.buttons |= (buf[3] & (1<<5)) ? STADIA_BUTTON_B  : 0;
-    c->state.buttons |= (buf[3] & (1<<4)) ? STADIA_BUTTON_X  : 0;
-    c->state.buttons |= (buf[3] & (1<<3)) ? STADIA_BUTTON_Y  : 0;
-    c->state.buttons |= (buf[3] & (1<<2)) ? STADIA_BUTTON_LB : 0;
-    c->state.buttons |= (buf[3] & (1<<1)) ? STADIA_BUTTON_RB : 0;
-    c->state.buttons |= (buf[3] & (1<<0)) ? STADIA_BUTTON_LS : 0;
+    c->state.buttons |= (buf[3] & (1<<6)) ? STADIA_BUTTON_A           : 0;
+    c->state.buttons |= (buf[3] & (1<<5)) ? STADIA_BUTTON_B           : 0;
+    c->state.buttons |= (buf[3] & (1<<4)) ? STADIA_BUTTON_X           : 0;
+    c->state.buttons |= (buf[3] & (1<<3)) ? STADIA_BUTTON_Y           : 0;
+    c->state.buttons |= (buf[3] & (1<<2)) ? STADIA_BUTTON_LB          : 0;
+    c->state.buttons |= (buf[3] & (1<<1)) ? STADIA_BUTTON_RB          : 0;
+    c->state.buttons |= (buf[3] & (1<<0)) ? STADIA_BUTTON_LS          : 0;
 
     c->state.left_stick_x  = buf[4];
     c->state.left_stick_y  = buf[5];
@@ -72,9 +88,6 @@ static void parse_input(struct stadia_controller *c, const BYTE *buf, size_t len
     stadia_update_callback(c, &c->state);
 }
 
-/* -----------------------------------------------------------------------
- * USB input thread
- * ----------------------------------------------------------------------- */
 static DWORD WINAPI _stadia_input_thread(LPVOID lparam)
 {
     struct stadia_controller *c = (struct stadia_controller*)lparam;
@@ -84,33 +97,23 @@ static DWORD WINAPI _stadia_input_thread(LPVOID lparam)
         bytes_read = hid_get_input_report(c->device, STADIA_READ_TIMEOUT);
 
         if (bytes_read == 0) {
-            /* Timeout — check stop signal and retry */
             if (WaitForSingleObject(c->stopping_event, 0) == WAIT_OBJECT_0)
                 break;
             continue;
         }
-
-        if (bytes_read < 0)
-            break; /* Device disconnected or I/O error */
+        if (bytes_read < 0) break;
 
         parse_input(c, c->device->input_buffer, (size_t)bytes_read);
     }
 
-    /*
-     * Do NOT call stadia_controller_destroy() from this thread —
-     * that would deadlock (destroy waits for this thread to exit).
-     * Instead signal active=FALSE and call the destroy callback,
-     * letting main thread do the cleanup.
-     */
     c->active = FALSE;
     SetEvent(c->stopping_event);
-    stadia_destroy_callback(c);
+    SetEvent(c->output_event);
+    if (stadia_disconnect_notify)
+        stadia_disconnect_notify();
     return 0;
 }
 
-/* -----------------------------------------------------------------------
- * Output thread — vibration (USB and BLE)
- * ----------------------------------------------------------------------- */
 static DWORD WINAPI _stadia_output_thread(LPVOID lparam)
 {
     struct stadia_controller *c = (struct stadia_controller*)lparam;
@@ -118,41 +121,58 @@ static DWORD WINAPI _stadia_output_thread(LPVOID lparam)
     HANDLE events[2] = {c->output_event, c->stopping_event};
 
     while (c->active) {
-        WaitForMultipleObjects(2, events, FALSE, INFINITE);
+        DWORD wr = WaitForMultipleObjects(2, events, FALSE, 500);
+        if (!c->active) break;
+        if (wr == WAIT_TIMEOUT) continue;
 
         AcquireSRWLockShared(&c->vibration_lock);
-        vibration[2] = c->big_motor;
-        vibration[4] = c->small_motor;
+        /* SDL/Chromium format: [reportId, big_low, big_high, small_low, small_high] */
+        vibration[1] = c->big_motor;
+        vibration[2] = 0;
+        vibration[3] = c->small_motor;
+        vibration[4] = 0;
         ReleaseSRWLockShared(&c->vibration_lock);
 
-        if (c->is_bluetooth) {
-            if (c->gatt)
-                gatt_send_output_report(c->gatt, vibration, sizeof(vibration));
+        stadia_dbg("output_thread: sending vibration big=%d small=%d gatt=%s out_sz=%u",
+                   vibration[1], vibration[3], c->gatt ? "yes" : "no",
+                   c->device ? c->device->output_report_size : 0);
+
+        if (c->gatt) {
+            /* BLE via GATT: try WinRT/Win32 GATT write first */
+            BOOL gatt_ok = gatt_send_output_report(c->gatt, vibration, sizeof(vibration));
+            if (!gatt_ok) {
+                /* GATT write failed — fall back to HID SetOutputReport (ATT Write
+                 * Request with response, correct for W=1/WNR=0 characteristics) */
+                INT r2 = hid_set_output_report(c->device, vibration, sizeof(vibration));
+                stadia_dbg("output_thread: hid_set_output_report returned %d (err=%u)", r2, GetLastError());
+            }
         } else {
-            hid_send_output_report(c->device, vibration, sizeof(vibration),
+            INT r = hid_send_output_report(c->device, vibration, sizeof(vibration),
                                    STADIA_READ_TIMEOUT);
+            stadia_dbg("output_thread: hid_send_output_report returned %d (err=%u)", r, GetLastError());
         }
 
         ResetEvent(c->output_event);
     }
 
-    /* Stop motors on exit */
-    if (c->is_bluetooth && c->gatt)
-        gatt_send_output_report(c->gatt, init_vibration, sizeof(init_vibration));
-    else if (!c->is_bluetooth && c->device)
-        hid_send_output_report(c->device, init_vibration, sizeof(init_vibration),
-                               STADIA_READ_TIMEOUT);
     return 0;
 }
 
-/* -----------------------------------------------------------------------
- * BLE input callback — called from GATT poll thread
- * ----------------------------------------------------------------------- */
 static void _gatt_input_cb(const BYTE *data, size_t len, void *userdata)
 {
     struct stadia_controller *c = (struct stadia_controller*)userdata;
     if (!c->active) return;
-    parse_input(c, data, len);
+
+    /*
+     * BLE GATT characteristic value has no report ID prefix.
+     * parse_input expects a USB-style frame: [0x03, dpad, btn1, btn2, axes...].
+     * Prepend 0x03 so both USB and BLE share the same parser.
+     */
+    BYTE buf[32];
+    if (len + 1 > sizeof(buf)) return;
+    buf[0] = 0x03;
+    memcpy(buf + 1, data, len);
+    parse_input(c, buf, len + 1);
 }
 
 static void _gatt_disconnect_cb(void *userdata)
@@ -161,16 +181,15 @@ static void _gatt_disconnect_cb(void *userdata)
     if (!c->active) return;
     c->active = FALSE;
     SetEvent(c->stopping_event);
-    stadia_destroy_callback(c);
+    SetEvent(c->output_event);
+    if (stadia_disconnect_notify)
+        stadia_disconnect_notify();
 }
 
-/* -----------------------------------------------------------------------
- * Public API
- * ----------------------------------------------------------------------- */
-
-struct stadia_controller *stadia_controller_create(struct hid_device *device,
-                                                   BOOL               is_bluetooth,
-                                                   const WCHAR       *bt_address)
+struct stadia_controller *stadia_controller_create(struct hid_device  *device,
+                                                   BOOL                is_bluetooth,
+                                                   const WCHAR        *bt_address,
+                                                   struct gatt_device *gatt_output)
 {
     SECURITY_ATTRIBUTES sa = {
         .nLength              = sizeof(SECURITY_ATTRIBUTES),
@@ -196,18 +215,29 @@ struct stadia_controller *stadia_controller_create(struct hid_device *device,
         c->gatt = gatt_open_stadia(bt_address, _gatt_input_cb, _gatt_disconnect_cb, c);
         if (!c->gatt) { stadia_controller_destroy(c); return NULL; }
 
-        /* Init vibration (non-fatal) */
         gatt_send_output_report(c->gatt, init_vibration, sizeof(init_vibration));
 
-        /* BLE input arrives via callback — only output thread needed */
         c->input_thread  = NULL;
         c->output_thread = CreateThread(&sa, 0, _stadia_output_thread, c, 0, NULL);
     } else {
-        /* USB: test vibration init (non-fatal) */
-        hid_send_output_report(device, init_vibration, sizeof(init_vibration),
-                               STADIA_READ_TIMEOUT);
+        /* BLE-via-HID: use gatt_output handle for vibration if provided */
+        c->gatt = gatt_output;
 
-        c->input_thread  = CreateThread(&sa, 0, _stadia_input_thread,  c,
+        stadia_dbg("create USB/BLE-HID: output_report_size=%u gatt_output=%s",
+                   device->output_report_size, gatt_output ? "yes" : "no");
+        if (!gatt_output) {
+            INT r = hid_send_output_report(device, init_vibration, sizeof(init_vibration),
+                                   STADIA_READ_TIMEOUT);
+            stadia_dbg("create USB: init_vibration hid_send returned %d (err=%u)", r, GetLastError());
+        } else {
+            BOOL gatt_ok = gatt_send_output_report(gatt_output, init_vibration, sizeof(init_vibration));
+            if (!gatt_ok) {
+                INT r2 = hid_set_output_report(device, init_vibration, sizeof(init_vibration));
+                stadia_dbg("create BLE: init hid_set_output_report returned %d (err=%u)", r2, GetLastError());
+            }
+        }
+
+        c->input_thread  = CreateThread(&sa, 0, _stadia_input_thread, c,
                                         CREATE_SUSPENDED, NULL);
         c->output_thread = CreateThread(&sa, 0, _stadia_output_thread, c,
                                         CREATE_SUSPENDED, NULL);
@@ -227,6 +257,7 @@ struct stadia_controller *stadia_controller_create(struct hid_device *device,
 void stadia_controller_set_vibration(struct stadia_controller *c,
                                      BYTE small_motor, BYTE big_motor)
 {
+    if (!c->active) return;
     AcquireSRWLockExclusive(&c->vibration_lock);
     c->small_motor = small_motor;
     c->big_motor   = big_motor;
@@ -238,31 +269,39 @@ void stadia_controller_destroy(struct stadia_controller *c)
 {
     if (!c) return;
 
+    /* Ensure destroy runs only once */
+    if (InterlockedExchange(&c->destroying, 1) != 0) return;
+
+    /* Signal all threads to stop */
     c->active = FALSE;
-
-    if (c->device)
-        CancelIoEx(c->device->handle, &c->device->input_ol);
-
     SetEvent(c->stopping_event);
     SetEvent(c->output_event);
 
+    if (c->device && c->device->handle != INVALID_HANDLE_VALUE)
+        CancelIoEx(c->device->handle, &c->device->input_ol);
+
     /*
-     * Wait for threads — but never wait on the calling thread itself
-     * (input thread calls stadia_destroy_callback, not this function).
+     * Wait for threads individually with short timeout.
+     * Do NOT use WaitForMultipleObjects — it can deadlock if one handle
+     * is invalid. Do NOT use long timeouts — output thread may be stuck
+     * in WinRT COM cleanup which pumps the main thread message loop,
+     * causing deadlock if main thread waits here.
      */
     DWORD calling_tid = GetCurrentThreadId();
-    HANDLE wait[2];
-    int wc = 0;
+    HANDLE threads[2] = { c->input_thread, c->output_thread };
+    for (int i = 0; i < 2; i++) {
+        HANDLE th = threads[i];
+        if (!th) continue;
+        if (GetThreadId(th) == calling_tid) continue;
+        /* 200ms — enough for clean exit, short enough to avoid UI freeze */
+        WaitForSingleObject(th, 200);
+    }
 
-    if (c->input_thread  && GetThreadId(c->input_thread)  != calling_tid)
-        wait[wc++] = c->input_thread;
-    if (c->output_thread && GetThreadId(c->output_thread) != calling_tid)
-        wait[wc++] = c->output_thread;
-
-    if (wc > 0)
-        WaitForMultipleObjects(wc, wait, TRUE, 3000);
-
-    if (c->gatt) { gatt_close(c->gatt); c->gatt = NULL; }
+    /* Release WinRT object before gatt_close to prevent COM deadlock */
+    if (c->gatt) {
+        gatt_close(c->gatt);
+        c->gatt = NULL;
+    }
 
     CloseHandle(c->stopping_event);
     CloseHandle(c->output_event);

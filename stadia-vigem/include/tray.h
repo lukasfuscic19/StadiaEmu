@@ -42,5 +42,8 @@ void tray_update(struct tray *tray);
 void tray_exit();
 void tray_register_device_notification(GUID filter, void (*cb)(UINT, LPTSTR));
 void tray_show_notification(UINT type, LPTSTR title, LPTSTR text);
+/* Post WM_APP to trigger refresh_devices() on the main thread safely */
+void tray_post_refresh(void);
+void tray_set_wm_app_callback(void (*cb)(void));
 
 #endif /* TRAY_H */

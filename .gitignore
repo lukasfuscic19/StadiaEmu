@@ -73,3 +73,26 @@
 # Output directories
 obj/
 bin/
+
+# Build / install artifacts (ship via GitHub Releases, not git)
+bin/*.exe
+bin/*.lib
+bin/*.pdb
+bin/*.log
+bin/*.pfx
+bin/*.cer
+bin/*.msix
+*.pfx
+*.cer
+
+# MSVC temp response files
+_CL_*
+
+# Sparse Package experiment (not needed for release)
+package_unpack/
+
+# IDE / local
+.vscode/*
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
