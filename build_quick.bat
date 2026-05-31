@@ -26,14 +26,8 @@ cl.exe /c /Zi /W4 /EHsc /DWIN32 /D_UNICODE /DUNICODE /Od ^
     /Foobj/libstadia/ ^
     libstadia/src/utils.c ^
     libstadia/src/hid.c ^
-    libstadia/src/stadia.c
-if errorlevel 1 goto :error
-
-echo === Building gatt.cpp ===
-cl.exe /c /Zi /W4 /EHsc /DWIN32 /D_UNICODE /DUNICODE /Od /std:c++17 ^
-    /Ilibstadia/include ^
-    /Foobj/libstadia/gatt.obj ^
-    libstadia/src/gatt.cpp
+    libstadia/src/stadia.c ^
+    libstadia/src/gatt.c
 if errorlevel 1 goto :error
 
 echo === Linking libstadia-x64.lib ===
@@ -53,7 +47,7 @@ cl.exe /Zi /W4 /EHsc /DWIN32 /D_UNICODE /DUNICODE /Od ^
     stadia-vigem/src/*.c ^
     obj/stadia-vigem/stadia-vigem.res ^
     bin/libstadia-x64.lib ^
-    User32.lib Ole32.lib OleAut32.lib windowsapp.lib SetupAPI.lib BluetoothApis.lib Hid.lib
+    User32.lib Ole32.lib OleAut32.lib SetupAPI.lib Hid.lib
 if errorlevel 1 goto :error
 
 echo.

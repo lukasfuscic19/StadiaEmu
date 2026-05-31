@@ -17,7 +17,6 @@
 /* BLE Stadia appears as HID with VID&0218d1_PID&9400 (Bluetooth SIG vendor-ID format) */
 #define STADIA_BLE_HID_FILTER    TEXT("0218d1_pid&9400")
 
-/* BLE HID path filter (Windows BLE HID path format) */
 #define STADIA_BLT_HW_VENDOR_ID  0x18D1
 #define STADIA_BLT_HW_PRODUCT_ID 0x9400
 #define STADIA_BLT_HW_FILTER     TEXT("vid&0218d1_pid&9400")
@@ -50,22 +49,15 @@ struct stadia_state
     BYTE  right_trigger;
 };
 
-/* Forward declaration (defined in gatt.h / gatt.cpp) */
-struct gatt_device;
-
 struct stadia_controller
 {
-    /* USB mode */
     struct hid_device  *device;
-
-    /* BLE mode */
-    struct gatt_device *gatt;
-    BOOL                is_bluetooth;
 
     SRWLOCK             state_lock;
     struct stadia_state state;
 
     BOOL   active;
+    BOOL   supports_vibration;
     HANDLE stopping_event;
     HANDLE output_event;
 
@@ -73,26 +65,21 @@ struct stadia_controller
     BYTE    small_motor;
     BYTE    big_motor;
 
-    HANDLE input_thread;   /* USB only; BLE input arrives via GATT callback */
+    HANDLE input_thread;
     HANDLE output_thread;
-    volatile LONG destroying; /* InterlockedExchange guard */
+    volatile LONG destroying;
 };
 
 void (*stadia_update_callback)(struct stadia_controller *, struct stadia_state *);
 void (*stadia_destroy_callback)(struct stadia_controller *);
-void (*stadia_disconnect_notify)(void); /* posted from BLE poll thread on disconnect */
+void (*stadia_disconnect_notify)(void);
 
 /*
- * Create a controller.
- *   USB:       device != NULL, is_bluetooth = FALSE, bt_address = NULL, gatt_output = NULL
- *   BLE (old): device = NULL,  is_bluetooth = TRUE,  bt_address = "AABBCCDDEEFF", gatt_output = NULL
- *   BLE (HID): device != NULL, is_bluetooth = FALSE, bt_address = NULL, gatt_output = <output-only handle>
- *              Input via HID ReadFile, vibration via GATT write on gatt_output.
+ * Create a controller for a HID device (USB or BLE-via-HID).
+ * supports_vibration: TRUE for USB, FALSE for Bluetooth (OS blocks BT rumble).
  */
-struct stadia_controller *stadia_controller_create(struct hid_device  *device,
-                                                   BOOL                is_bluetooth,
-                                                   const WCHAR        *bt_address,
-                                                   struct gatt_device *gatt_output);
+struct stadia_controller *stadia_controller_create(struct hid_device *device,
+                                                   BOOL supports_vibration);
 
 void stadia_controller_set_vibration(struct stadia_controller *controller,
                                      BYTE small_motor, BYTE big_motor);

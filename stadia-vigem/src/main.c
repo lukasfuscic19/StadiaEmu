@@ -422,21 +422,9 @@ static BOOL add_usb_device(LPTSTR path)
     dbg_log("add_usb_device: UP=%04X U=%04X in_sz=%u path=%ls",
             device->usage_page, device->usage, device->input_report_size, path);
 
-    /* Detect BLE HID path and open GATT output-only for vibration */
     BOOL is_ble_hid = (_tcsistr(path, TEXT("00001812-0000-1000-8000-00805f9b34fb")) != NULL);
-    struct gatt_device *gatt_out = NULL;
-    if (is_ble_hid) {
-        WCHAR mac[20] = {0};
-        if (extract_ble_mac(path, mac)) {
-            dbg_log("add_usb_device: BLE HID detected mac=%ls", mac);
-            gatt_out = gatt_open_output_only(mac);
-            dbg_log("add_usb_device: gatt_open_output_only -> %s", gatt_out ? "OK" : "FAILED");
-        } else {
-            dbg_log("add_usb_device: BLE HID but MAC extraction failed");
-        }
-    }
-
-    struct stadia_controller *ctrl = stadia_controller_create(device, FALSE, NULL, gatt_out);
+    struct stadia_controller *ctrl =
+        stadia_controller_create(device, !is_ble_hid);
     if (!ctrl) {
         tray_show_notification(NT_TRAY_WARNING, TEXT("Stadia ViGEm"),
                                TEXT("Error initializing USB device"));
@@ -450,6 +438,15 @@ static BOOL add_usb_device(LPTSTR path)
     ad->battery_pct = -1;
     ad->controller  = ctrl;
 
+    if (is_ble_hid) {
+        WCHAR mac[20] = {0};
+        if (extract_ble_mac(path, mac)) {
+            wcscpy_s(ad->bt_address, 20, mac);
+            ad->battery_pct = gatt_get_battery_level(mac);
+            dbg_log("add_usb_device: BLE HID mac=%ls battery=%d", mac, ad->battery_pct);
+        }
+    }
+
     if (vigem_connected) {
         ad->tgt_device = vigem_target_x360_alloc();
         vigem_target_add(vigem_client, ad->tgt_device);
@@ -461,44 +458,6 @@ static BOOL add_usb_device(LPTSTR path)
     AcquireSRWLockExclusive(&active_devices_lock);
     active_devices[active_device_count++] = ad;
     ReleaseSRWLockExclusive(&active_devices_lock);
-
-    rebuild_tray_menu();
-    tray_update(&tray);
-    return TRUE;
-}
-
-static BOOL add_ble_device(const WCHAR *bt_address)
-{
-    if (active_device_count == MAX_ACTIVE_DEVICE_COUNT) return FALSE;
-
-    dbg_log("add_ble_device: creating controller for %ls", bt_address);
-    struct stadia_controller *ctrl =
-        stadia_controller_create(NULL, TRUE, bt_address, NULL);
-    if (!ctrl) {
-        dbg_log("add_ble_device: stadia_controller_create FAILED for %ls", bt_address);
-        return FALSE;
-    }
-    dbg_log("add_ble_device: controller created OK for %ls", bt_address);
-
-    struct active_device *ad = (struct active_device*)calloc(1, sizeof(struct active_device));
-    ad->src_device  = NULL;
-    ad->battery_pct = gatt_get_battery_level(bt_address);
-    ad->controller  = ctrl;
-    wcscpy_s(ad->bt_address, 20, bt_address);
-
-    if (vigem_connected) {
-        ad->tgt_device = vigem_target_x360_alloc();
-        vigem_target_add(vigem_client, ad->tgt_device);
-        XUSB_REPORT_INIT(&ad->tgt_report);
-        vigem_target_x360_register_notification(vigem_client, ad->tgt_device,
-                                                x360_notification_cb, (LPVOID)ad);
-        dbg_log("add_ble_device: ViGEm target added for %ls", bt_address);
-    }
-
-    AcquireSRWLockExclusive(&active_devices_lock);
-    active_devices[active_device_count++] = ad;
-    ReleaseSRWLockExclusive(&active_devices_lock);
-    dbg_log("add_ble_device: done, active_count=%d", active_device_count);
 
     rebuild_tray_menu();
     tray_update(&tray);
@@ -540,10 +499,7 @@ static BOOL remove_device(struct stadia_controller *ctrl)
  * ----------------------------------------------------------------------- */
 static void refresh_devices(void)
 {
-    /* Re-entrancy guard: WinRT .get() calls inside gatt_open_stadia pump the
-     * COM message loop, which can deliver a new WM_DEVICECHANGE or WM_APP into
-     * this same thread while we are still executing here.  Silently drop the
-     * nested call — the scan we are already running will pick up the state. */
+    /* Re-entrancy guard: drop nested refresh calls from WM_DEVICECHANGE / WM_APP. */
     static volatile LONG in_refresh = 0;
     if (InterlockedCompareExchange(&in_refresh, 1, 0) != 0) {
         dbg_log("refresh_devices: SKIPPED (re-entrant call)");
@@ -605,7 +561,6 @@ static void refresh_devices(void)
     /* Remove HID devices no longer present. */
     AcquireSRWLockShared(&active_devices_lock);
     for (int i = 0; i < active_device_count; i++) {
-        if (active_devices[i]->bt_address[0] != 0) continue; /* skip legacy GATT BLE */
         BOOL found = FALSE;
         for (cur = dev_info; cur; cur = cur->next)
             if (active_devices[i]->src_device &&
@@ -639,38 +594,7 @@ static void refresh_devices(void)
     }
     while (dev_info) { cur = dev_info->next; hid_free_device_info(dev_info); dev_info = cur; }
 
-    /* --- BLE GATT scan (battery level only; input handled via HID above) --- */
-    WCHAR ble_addrs[4][20];
-    int ble_count = gatt_find_stadia_devices(ble_addrs, 4);
-    dbg_log("refresh_devices: BLE GATT scan found %d device(s)", ble_count);
-
-    /* Remove BLE devices no longer present.
-     * Do NOT call stadia_controller_destroy here — the poll thread will detect
-     * the read error, call on_disconnect, and post WM_APP so the cleanup block
-     * above handles it safely on the next refresh. Just flag as inactive. */
-    AcquireSRWLockShared(&active_devices_lock);
-    for (int i = 0; i < active_device_count; i++) {
-        if (active_devices[i]->bt_address[0] == 0) continue; /* skip USB */
-        BOOL found = FALSE;
-        for (int b = 0; b < ble_count; b++)
-            if (_wcsicmp(active_devices[i]->bt_address, ble_addrs[b]) == 0)
-            { found = TRUE; break; }
-        if (!found && active_devices[i]->controller->active) {
-            dbg_log("refresh_devices: BLE device[%d] bt=%ls gone, flagging inactive", i, active_devices[i]->bt_address);
-            /* Signal: poll thread will break out of GATT read on next iteration */
-            active_devices[i]->controller->active = FALSE;
-            SetEvent(active_devices[i]->controller->stopping_event);
-            SetEvent(active_devices[i]->controller->output_event);
-            tray_post_refresh(); /* schedule cleanup via WM_APP */
-        }
-    }
-    ReleaseSRWLockShared(&active_devices_lock);
-
-    /* Add new BLE devices via GATT is intentionally disabled:
-     * The OS HID driver exclusively owns GATT notifications.
-     * BLE devices are already added above via the HID scan. */
-
-    /* Refresh battery for connected BLE devices */
+    /* Refresh battery for connected BLE HID devices */
     AcquireSRWLockExclusive(&active_devices_lock);
     for (int i = 0; i < active_device_count; i++)
         if (active_devices[i]->bt_address[0] != 0)
@@ -692,7 +616,7 @@ static void device_change_cb(UINT op, LPTSTR path)
     refresh_devices();
 }
 
-/* Called when WM_APP is posted (e.g. BLE disconnect signalled from poll thread) */
+/* Called when WM_APP is posted (e.g. HID disconnect) */
 static void on_wm_app(void) {
     dbg_log("on_wm_app: WM_APP received, calling refresh_devices");
     refresh_devices();

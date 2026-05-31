@@ -59,7 +59,7 @@ When running, the app writes `debug.log` next to the executable (same folder as 
 ## Project layout
 
 ```
-libstadia/          Core HID + Stadia protocol + GATT helpers
+libstadia/          Core HID + Stadia protocol + BLE battery helper
 stadia-vigem/       Tray application + ViGEm bridge
 ViGEmClient/        Submodule (ViGEm client library)
 Install.ps1         End-user installer (drivers + app)

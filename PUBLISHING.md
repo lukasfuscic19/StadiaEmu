@@ -24,7 +24,6 @@ Do **not** commit secrets or build artifacts:
 
 - `bin/*.exe`, `bin/*.pfx`, `bin/*.cer`, `bin/*.msix`, `bin/*.log`
 - `_CL_*` (compiler temp)
-- `package_unpack/` (Sparse Package experiment — optional to delete)
 
 Then:
 
