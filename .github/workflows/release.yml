@@ -20,25 +20,22 @@ jobs:
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Build
-        shell: cmd
-        run: build_quick.bat
+      - name: Install Inno Setup
+        run: choco install innosetup -y
 
-      - name: Create release zip
+      - name: Build and package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path release -Force | Out-Null
-          Copy-Item bin\stadia-vigem-x64.exe release\
-          Copy-Item Install.ps1 release\
-          Copy-Item README.md release\
-          Compress-Archive -Path release\* -DestinationPath StadiaViGEm-win64.zip
+          cmd /c build_quick.bat
+          ./package_release.ps1
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
           files: |
             bin/stadia-vigem-x64.exe
+            release/StadiaViGEm-Setup-x64.exe
+            release/StadiaViGEm-Portable-win64.zip
             Install.ps1
             README.md
-            StadiaViGEm-win64.zip
           generate_release_notes: true

@@ -82,6 +82,9 @@ bin/*.log
 bin/*.pfx
 bin/*.cer
 bin/*.msix
+release/*.exe
+release/*.zip
+release/portable/
 *.pfx
 *.cer
 

@@ -87,7 +87,7 @@ function Invoke-Build-Stadia-ViGEm {
     $StopWatch.Start()
 
     & "rc.exe" /foobj/stadia-vigem/stadia-vigem.res stadia-vigem/res/res.rc
-    & "cl.exe" $Flags $CommonFlags /Ilibstadia/include /IViGEmClient/include /Istadia-vigem/include /Foobj/stadia-vigem/ /Febin/$OutputName ViGEmClient/src/*.cpp obj/stadia-vigem/stadia-vigem.res stadia-vigem/src/*.c $LibraryPath User32.lib Ole32.lib OleAut32.lib SetupAPI.lib Hid.lib
+    & "cl.exe" $Flags $CommonFlags /Ilibstadia/include /IViGEmClient/include /Istadia-vigem/include /Foobj/stadia-vigem/ /Febin/$OutputName ViGEmClient/src/*.cpp obj/stadia-vigem/stadia-vigem.res stadia-vigem/src/*.c $LibraryPath User32.lib Ole32.lib OleAut32.lib SetupAPI.lib Hid.lib Advapi32.lib
 
     $StopWatch.Stop()
 

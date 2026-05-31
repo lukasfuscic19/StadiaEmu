@@ -19,7 +19,8 @@
 #>
 
 param(
-    [switch]$SkipDrivers
+    [switch]$SkipDrivers,
+    [switch]$Silent
 )
 
 $ErrorActionPreference = "Stop"
@@ -51,7 +52,7 @@ function Write-Log($msg) {
 function Abort($msg) {
     Write-Host ""
     Write-Host "ERROR: $msg" -ForegroundColor Red
-    Read-Host "Press Enter to close"
+    if (-not $Silent) { Read-Host "Press Enter to close" }
     exit 1
 }
 
@@ -189,4 +190,6 @@ finally {
     Stop-Transcript | Out-Null
 }
 
-Read-Host "Press Enter to close"
+if (-not $Silent) {
+    Read-Host "Press Enter to close"
+}

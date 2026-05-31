@@ -47,7 +47,7 @@ cl.exe /Zi /W4 /EHsc /DWIN32 /D_UNICODE /DUNICODE /Od ^
     stadia-vigem/src/*.c ^
     obj/stadia-vigem/stadia-vigem.res ^
     bin/libstadia-x64.lib ^
-    User32.lib Ole32.lib OleAut32.lib SetupAPI.lib Hid.lib
+    User32.lib Ole32.lib OleAut32.lib SetupAPI.lib Hid.lib Advapi32.lib
 if errorlevel 1 goto :error
 
 echo.
